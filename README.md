@@ -193,8 +193,46 @@ safe-fix --graph --project /path/to/any/project
 | `--graph --json` | Same as `--graph` but also exports to `.safe-fix/cache/dependency-graph.json` |
 | `--impact FILE` | Shows the blast radius of changing a specific file — every file transitively affected |
 | `--history` | Shows fix history — pass/fail timeline, streaks, most-changed files, success rate |
+| `--scan` | Scan entire codebase for bugs, vulnerabilities, and code quality issues |
+| `--scan --severity CRITICAL,HIGH` | Filter scan results by severity level |
+| `--scan --category security` | Filter scan results by category (security, logic, quality) |
 | `--reset` | Deletes cached state files |
 | `--project DIR` | Target a different project directory (default: current directory) |
+
+## Bug scanner
+
+Scan your entire codebase for bugs, vulnerabilities, and code quality issues in one command:
+
+```bash
+safe-fix --scan
+```
+
+**What it finds:**
+
+| Category | Examples |
+|----------|----------|
+| **Security** | SQL injection, XSS, command injection, path traversal, hardcoded secrets, pickle deserialization, weak hashing, eval/exec, YAML unsafe load |
+| **Logic** | Division by zero, empty collection access, mutable default args, bare except, unchecked errors |
+| **Quality** | Wildcard imports, TODO/FIXME markers, print statements, var declarations, any types |
+
+**How it works:**
+
+1. **Built-in rules** — regex-based pattern matching for common bugs across 9 languages (Python, JavaScript, TypeScript, Go, Java, Ruby, Rust, C, C++)
+2. **External tools** — auto-runs bandit, semgrep, eslint, gosec when installed and merges findings into one report
+3. **Deduplication** — overlapping findings from built-in rules and external tools are merged
+4. **Unified report** — every finding includes file, line number, severity, category, description, and suggested fix
+
+**Filter results:**
+
+```bash
+# Only critical and high severity
+safe-fix --scan --severity CRITICAL,HIGH
+
+# Only security issues
+safe-fix --scan --category security
+```
+
+The full report is saved to `.safe-fix/cache/scan-report.json` for programmatic use.
 
 ## Dependency graph
 

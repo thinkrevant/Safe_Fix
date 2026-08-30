@@ -667,6 +667,361 @@ def auto_detect_stack():
     return config, names, available, unavailable
 
 
+# ── Bug Scanner Rules ──────────────────────────────────────────────────────
+
+SCAN_RULES = {
+    "python": [
+        # Security — Critical
+        {"id": "PY-SEC-001", "severity": "CRITICAL", "category": "security",
+         "name": "SQL Injection", "pattern": re.compile(r'''(?:execute|executemany)\s*\(\s*f["']|(?:execute|executemany)\s*\(\s*["'].*%s|(?:execute|executemany)\s*\(\s*.*\.format\(|(?:execute|executemany)\s*\(\s*.*\+\s*(?:['"]|[\w.]+)''', re.MULTILINE),
+         "description": "SQL query built with string formatting — vulnerable to SQL injection",
+         "fix": "Use parameterized queries: cursor.execute('SELECT * FROM users WHERE id = ?', (user_id,))"},
+        {"id": "PY-SEC-002", "severity": "CRITICAL", "category": "security",
+         "name": "Command Injection", "pattern": re.compile(r'''(?:subprocess\.(?:call|run|Popen|check_output|check_call)\s*\(.*shell\s*=\s*True|os\.system\s*\(|os\.popen\s*\()''', re.MULTILINE),
+         "description": "Shell command execution with user-controllable input",
+         "fix": "Use subprocess with shell=False and pass args as a list: subprocess.run(['cmd', arg])"},
+        {"id": "PY-SEC-003", "severity": "CRITICAL", "category": "security",
+         "name": "Hardcoded Secret", "pattern": re.compile(r'''(?:password|secret|api_key|apikey|token|private_key|SECRET_KEY|DB_PASS|AWS_SECRET)\s*=\s*["'][^"']{4,}["']''', re.IGNORECASE | re.MULTILINE),
+         "description": "Hardcoded credential or secret in source code",
+         "fix": "Use environment variables: os.environ.get('SECRET_KEY')"},
+        {"id": "PY-SEC-004", "severity": "CRITICAL", "category": "security",
+         "name": "Pickle Deserialization", "pattern": re.compile(r'''pickle\.(?:load|loads)\s*\(''', re.MULTILINE),
+         "description": "Deserializing untrusted data with pickle allows arbitrary code execution",
+         "fix": "Use json.loads() or a safe serialization format"},
+        {"id": "PY-SEC-005", "severity": "CRITICAL", "category": "security",
+         "name": "Eval/Exec Usage", "pattern": re.compile(r'''(?<!\w)(?:eval|exec)\s*\(''', re.MULTILINE),
+         "description": "eval/exec can execute arbitrary code if input is not trusted",
+         "fix": "Use ast.literal_eval() for data parsing, or avoid dynamic code execution"},
+        {"id": "PY-SEC-006", "severity": "HIGH", "category": "security",
+         "name": "Path Traversal", "pattern": re.compile(r'''open\s*\(.*(?:request|input|argv|args|params|query|filename|filepath|path)''', re.IGNORECASE | re.MULTILINE),
+         "description": "File opened with user-supplied path without sanitization",
+         "fix": "Validate path with os.path.realpath() and check it stays within allowed directory"},
+        {"id": "PY-SEC-007", "severity": "HIGH", "category": "security",
+         "name": "Weak Hashing", "pattern": re.compile(r'''(?:hashlib\.md5|hashlib\.sha1|MD5|\.md5\(|\.sha1\()''', re.MULTILINE),
+         "description": "MD5/SHA1 used for password hashing or security — cryptographically broken",
+         "fix": "Use hashlib.pbkdf2_hmac(), bcrypt, or argon2 for passwords; SHA-256+ for integrity"},
+        {"id": "PY-SEC-008", "severity": "HIGH", "category": "security",
+         "name": "Insecure Temp File", "pattern": re.compile(r'''(?:tempfile\.mktemp\s*\(|open\s*\(\s*['"]/tmp/)''', re.MULTILINE),
+         "description": "Predictable temp file path — vulnerable to symlink attacks",
+         "fix": "Use tempfile.mkstemp() or tempfile.NamedTemporaryFile()"},
+        {"id": "PY-SEC-009", "severity": "HIGH", "category": "security",
+         "name": "YAML Unsafe Load", "pattern": re.compile(r'''yaml\.load\s*\([^)]*(?!\bLoader\b)''', re.MULTILINE),
+         "description": "yaml.load() without SafeLoader allows arbitrary code execution",
+         "fix": "Use yaml.safe_load() or yaml.load(data, Loader=yaml.SafeLoader)"},
+        {"id": "PY-SEC-010", "severity": "MEDIUM", "category": "security",
+         "name": "Debug Mode Enabled", "pattern": re.compile(r'''(?:DEBUG\s*=\s*True|app\.run\s*\(.*debug\s*=\s*True)''', re.MULTILINE),
+         "description": "Debug mode enabled — exposes stack traces and internal state",
+         "fix": "Set DEBUG=False in production, use environment variables to control"},
+        # Logic bugs
+        {"id": "PY-LOG-001", "severity": "MEDIUM", "category": "logic",
+         "name": "Division Without Zero Check", "pattern": re.compile(r'''(?:return\s+\w+\s*/\s*\w+|=\s*\w+\s*/\s*\w+)(?!.*(?:if|!=\s*0|> 0|zero))''', re.MULTILINE),
+         "description": "Division without checking for zero divisor",
+         "fix": "Add a guard: if divisor == 0: raise ValueError('Division by zero')"},
+        {"id": "PY-LOG-002", "severity": "MEDIUM", "category": "logic",
+         "name": "Empty Collection Access", "pattern": re.compile(r'''(?:\w+\[0\]|\w+\[-1\])(?!.*(?:if\s+\w+|len\s*\(|not\s+\w+))''', re.MULTILINE),
+         "description": "Accessing first/last element without checking if collection is empty",
+         "fix": "Check length first: if items: return items[0]"},
+        {"id": "PY-LOG-003", "severity": "LOW", "category": "logic",
+         "name": "Mutable Default Argument", "pattern": re.compile(r'''def\s+\w+\s*\([^)]*=\s*(?:\[\]|\{\}|set\(\))''', re.MULTILINE),
+         "description": "Mutable default argument shared across calls",
+         "fix": "Use None as default: def func(items=None): items = items or []"},
+        {"id": "PY-LOG-004", "severity": "MEDIUM", "category": "logic",
+         "name": "Bare Except", "pattern": re.compile(r'''except\s*:''', re.MULTILINE),
+         "description": "Bare except catches all exceptions including KeyboardInterrupt and SystemExit",
+         "fix": "Catch specific exceptions: except (ValueError, TypeError):"},
+        # Code quality
+        {"id": "PY-QUA-001", "severity": "LOW", "category": "quality",
+         "name": "Wildcard Import", "pattern": re.compile(r'''from\s+\w+(?:\.\w+)*\s+import\s+\*''', re.MULTILINE),
+         "description": "Wildcard import pollutes namespace and hides dependencies",
+         "fix": "Import specific names: from module import func1, func2"},
+        {"id": "PY-QUA-002", "severity": "LOW", "category": "quality",
+         "name": "TODO/FIXME/HACK", "pattern": re.compile(r'''#\s*(?:TODO|FIXME|HACK|XXX|BUG)\b''', re.IGNORECASE | re.MULTILINE),
+         "description": "Unresolved TODO/FIXME marker in code",
+         "fix": "Resolve the issue or create a tracked issue for it"},
+        {"id": "PY-QUA-003", "severity": "LOW", "category": "quality",
+         "name": "Print Statement in Production", "pattern": re.compile(r'''(?<!\w)print\s*\(''', re.MULTILINE),
+         "description": "Print statement — use logging module for production code",
+         "fix": "Replace with logging.info(), logging.debug(), etc."},
+    ],
+    "javascript": [
+        {"id": "JS-SEC-001", "severity": "CRITICAL", "category": "security",
+         "name": "eval() Usage", "pattern": re.compile(r'''(?<!\w)eval\s*\(''', re.MULTILINE),
+         "description": "eval() executes arbitrary code — XSS and injection risk",
+         "fix": "Use JSON.parse() for data, or avoid dynamic code execution"},
+        {"id": "JS-SEC-002", "severity": "CRITICAL", "category": "security",
+         "name": "innerHTML Assignment", "pattern": re.compile(r'''\.innerHTML\s*=''', re.MULTILINE),
+         "description": "Direct innerHTML assignment — vulnerable to XSS",
+         "fix": "Use textContent for text, or sanitize with DOMPurify before inserting HTML"},
+        {"id": "JS-SEC-003", "severity": "CRITICAL", "category": "security",
+         "name": "Hardcoded Secret", "pattern": re.compile(r'''(?:password|secret|api_key|apikey|token|private_key)\s*[:=]\s*["'][^"']{4,}["']''', re.IGNORECASE | re.MULTILINE),
+         "description": "Hardcoded credential or API key in source code",
+         "fix": "Use environment variables: process.env.API_KEY"},
+        {"id": "JS-SEC-004", "severity": "HIGH", "category": "security",
+         "name": "SQL String Concatenation", "pattern": re.compile(r'''(?:query|sql|SELECT|INSERT|UPDATE|DELETE).*[\+`].*(?:req\.|params\.|body\.|query\.)''', re.IGNORECASE | re.MULTILINE),
+         "description": "SQL query built with string concatenation — injection risk",
+         "fix": "Use parameterized queries or an ORM"},
+        {"id": "JS-SEC-005", "severity": "HIGH", "category": "security",
+         "name": "No CSRF Protection", "pattern": re.compile(r'''app\.(?:post|put|delete|patch)\s*\(''', re.MULTILINE),
+         "description": "State-changing endpoint without visible CSRF protection",
+         "fix": "Add CSRF middleware: app.use(csrf())"},
+        {"id": "JS-SEC-006", "severity": "MEDIUM", "category": "security",
+         "name": "Console.log in Production", "pattern": re.compile(r'''console\.log\s*\(''', re.MULTILINE),
+         "description": "Console.log may leak sensitive data in production",
+         "fix": "Use a logging library with log levels, strip console.log in builds"},
+        {"id": "JS-LOG-001", "severity": "MEDIUM", "category": "logic",
+         "name": "== Instead of ===", "pattern": re.compile(r'''(?<![!=<>])={2}(?!=)''', re.MULTILINE),
+         "description": "Loose equality (==) causes type coercion bugs",
+         "fix": "Use strict equality (===) for predictable comparisons"},
+        {"id": "JS-QUA-001", "severity": "LOW", "category": "quality",
+         "name": "var Declaration", "pattern": re.compile(r'''(?<!\w)var\s+\w+''', re.MULTILINE),
+         "description": "var has function scope — causes hoisting bugs",
+         "fix": "Use let or const instead"},
+    ],
+    "go": [
+        {"id": "GO-SEC-001", "severity": "CRITICAL", "category": "security",
+         "name": "SQL String Formatting", "pattern": re.compile(r'''(?:fmt\.Sprintf|string\s*\+).*(?:SELECT|INSERT|UPDATE|DELETE)''', re.IGNORECASE | re.MULTILINE),
+         "description": "SQL query built with fmt.Sprintf — injection risk",
+         "fix": "Use parameterized queries: db.Query('SELECT * FROM users WHERE id = $1', id)"},
+        {"id": "GO-SEC-002", "severity": "HIGH", "category": "security",
+         "name": "Hardcoded Credential", "pattern": re.compile(r'''(?:password|secret|token|apiKey)\s*[:=]\s*"[^"]{4,}"''', re.IGNORECASE | re.MULTILINE),
+         "description": "Hardcoded secret in source code",
+         "fix": "Use os.Getenv() or a secrets manager"},
+        {"id": "GO-LOG-001", "severity": "HIGH", "category": "logic",
+         "name": "Unchecked Error", "pattern": re.compile(r'''(?:\w+)\s*,\s*_\s*(?::=|=)\s*\w+\.\w+\(''', re.MULTILINE),
+         "description": "Error return value discarded with _ — bugs will be silent",
+         "fix": "Check the error: if err != nil { return err }"},
+        {"id": "GO-QUA-001", "severity": "LOW", "category": "quality",
+         "name": "fmt.Println Debug", "pattern": re.compile(r'''fmt\.Print(?:ln|f)?\s*\(''', re.MULTILINE),
+         "description": "fmt.Print in production code — use structured logging",
+         "fix": "Use log.Printf() or a structured logging library"},
+    ],
+    "java": [
+        {"id": "JV-SEC-001", "severity": "CRITICAL", "category": "security",
+         "name": "SQL Injection", "pattern": re.compile(r'''(?:Statement|createStatement|executeQuery|executeUpdate)\s*\(.*["+]''', re.MULTILINE),
+         "description": "SQL query built with string concatenation",
+         "fix": "Use PreparedStatement with parameter binding"},
+        {"id": "JV-SEC-002", "severity": "HIGH", "category": "security",
+         "name": "Hardcoded Password", "pattern": re.compile(r'''(?:password|secret|apiKey)\s*=\s*"[^"]{4,}"''', re.IGNORECASE | re.MULTILINE),
+         "description": "Hardcoded credential in source code",
+         "fix": "Use environment variables or a secrets vault"},
+        {"id": "JV-LOG-001", "severity": "MEDIUM", "category": "logic",
+         "name": "Empty Catch Block", "pattern": re.compile(r'''catch\s*\([^)]*\)\s*\{\s*\}''', re.MULTILINE),
+         "description": "Empty catch block silently swallows exceptions",
+         "fix": "Log the exception or rethrow it"},
+    ],
+    "ruby": [
+        {"id": "RB-SEC-001", "severity": "CRITICAL", "category": "security",
+         "name": "SQL Injection", "pattern": re.compile(r'''(?:where|find_by_sql|execute)\s*\(?\s*["'].*#\{''', re.MULTILINE),
+         "description": "SQL query built with string interpolation",
+         "fix": "Use parameterized queries: where('name = ?', name)"},
+        {"id": "RB-SEC-002", "severity": "CRITICAL", "category": "security",
+         "name": "System/Exec Call", "pattern": re.compile(r'''(?:system|exec|`[^`]*`|%x\{)''', re.MULTILINE),
+         "description": "Shell command execution — command injection risk",
+         "fix": "Use Open3.capture3 or shellescape input"},
+        {"id": "RB-SEC-003", "severity": "HIGH", "category": "security",
+         "name": "Mass Assignment", "pattern": re.compile(r'''params\.permit!|params\[:?\w+\](?!\.permit)''', re.MULTILINE),
+         "description": "Unsanitized params — mass assignment vulnerability",
+         "fix": "Use strong parameters: params.require(:user).permit(:name, :email)"},
+    ],
+    "rust": [
+        {"id": "RS-SEC-001", "severity": "HIGH", "category": "security",
+         "name": "Unsafe Block", "pattern": re.compile(r'''unsafe\s*\{''', re.MULTILINE),
+         "description": "Unsafe block bypasses Rust's memory safety guarantees",
+         "fix": "Minimize unsafe usage, document why it's necessary, add safety comments"},
+        {"id": "RS-LOG-001", "severity": "MEDIUM", "category": "logic",
+         "name": "Unwrap Usage", "pattern": re.compile(r'''\.unwrap\(\)''', re.MULTILINE),
+         "description": ".unwrap() panics on None/Err — use proper error handling",
+         "fix": "Use .unwrap_or(), .unwrap_or_default(), ? operator, or match"},
+    ],
+    "c": [
+        {"id": "C-SEC-001", "severity": "CRITICAL", "category": "security",
+         "name": "Buffer Overflow Risk", "pattern": re.compile(r'''(?:gets\s*\(|strcpy\s*\(|strcat\s*\(|sprintf\s*\()''', re.MULTILINE),
+         "description": "Unsafe C function — no bounds checking, buffer overflow risk",
+         "fix": "Use fgets(), strncpy(), strncat(), snprintf() instead"},
+        {"id": "C-SEC-002", "severity": "HIGH", "category": "security",
+         "name": "Format String Vulnerability", "pattern": re.compile(r'''printf\s*\(\s*\w+\s*\)''', re.MULTILINE),
+         "description": "User-controlled format string — can read/write arbitrary memory",
+         "fix": "Use printf(\"%s\", user_input) instead of printf(user_input)"},
+    ],
+}
+# cpp shares C rules
+SCAN_RULES["cpp"] = SCAN_RULES["c"] + [
+    {"id": "CPP-QUA-001", "severity": "LOW", "category": "quality",
+     "name": "Raw Pointer Usage", "pattern": re.compile(r'''(?<!\w)new\s+\w+''', re.MULTILINE),
+     "description": "Raw pointer from new — risk of memory leaks",
+     "fix": "Use std::unique_ptr or std::shared_ptr"},
+]
+# TypeScript shares JS rules
+SCAN_RULES["typescript"] = SCAN_RULES["javascript"] + [
+    {"id": "TS-QUA-001", "severity": "MEDIUM", "category": "quality",
+     "name": "any Type Usage", "pattern": re.compile(r''':\s*any\b''', re.MULTILINE),
+     "description": "Using 'any' defeats TypeScript's type safety",
+     "fix": "Use a specific type, unknown, or a generic"},
+]
+
+EXTERNAL_SCANNERS = {
+    "python": [
+        {"name": "bandit", "cmd": "python -m bandit -r {dir} -f json -q", "tool": "bandit", "parser": "bandit"},
+        {"name": "semgrep", "cmd": "semgrep --config auto {dir} --json -q", "tool": "semgrep", "parser": "semgrep"},
+    ],
+    "javascript": [
+        {"name": "eslint", "cmd": "npx eslint {dir} --format json", "tool": "eslint", "parser": "eslint"},
+    ],
+    "typescript": [
+        {"name": "eslint", "cmd": "npx eslint {dir} --format json", "tool": "eslint", "parser": "eslint"},
+    ],
+    "go": [
+        {"name": "gosec", "cmd": "gosec -fmt=json ./...", "tool": "gosec", "parser": "gosec"},
+    ],
+}
+
+SCAN_REPORT_JSON = None  # set after paths are resolved
+
+
+def _resolve_scan_report_path():
+    return os.path.join(CACHE_DIR, "scan-report.json")
+
+
+def scan_file(filepath, language):
+    """Scan a single file for bugs using built-in rules. Returns list of findings."""
+    rules = SCAN_RULES.get(language, [])
+    if not rules:
+        return []
+
+    full_path = os.path.join(PROJECT_ROOT, filepath)
+    try:
+        with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+            lines = content.splitlines()
+    except (OSError, IOError):
+        return []
+
+    findings = []
+    for rule in rules:
+        for match in rule["pattern"].finditer(content):
+            line_num = content[:match.start()].count("\n") + 1
+            line_text = lines[line_num - 1].strip() if line_num <= len(lines) else ""
+            findings.append({
+                "id": rule["id"],
+                "file": filepath,
+                "line": line_num,
+                "line_text": line_text,
+                "severity": rule["severity"],
+                "category": rule["category"],
+                "name": rule["name"],
+                "description": rule["description"],
+                "fix": rule["fix"],
+                "source": "built-in",
+            })
+    return findings
+
+
+def run_external_scanners(languages):
+    """Run available external scanners and parse their output."""
+    findings = []
+    seen_tools = set()
+
+    for lang in languages:
+        scanners = EXTERNAL_SCANNERS.get(lang, [])
+        for scanner in scanners:
+            if scanner["name"] in seen_tools:
+                continue
+            if not _tool_available(scanner["tool"]):
+                continue
+            seen_tools.add(scanner["name"])
+
+            cmd = scanner["cmd"].replace("{dir}", ".")
+            print(f"  {DIM}Running {scanner['name']}...{RESET}")
+            r = run(cmd)
+            if r["code"] != 0 and not r["out"]:
+                continue
+
+            try:
+                data = json.loads(r["out"])
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+            if scanner["parser"] == "bandit":
+                for result in data.get("results", []):
+                    sev = result.get("issue_severity", "MEDIUM").upper()
+                    findings.append({
+                        "id": f"BANDIT-{result.get('test_id', '?')}",
+                        "file": os.path.relpath(result.get("filename", "?"), PROJECT_ROOT),
+                        "line": result.get("line_number", 0),
+                        "line_text": (result.get("code", "").strip().splitlines() or [""])[0][:120],
+                        "severity": sev if sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW") else "MEDIUM",
+                        "category": "security",
+                        "name": result.get("test_name", result.get("test_id", "?")),
+                        "description": result.get("issue_text", ""),
+                        "fix": f"See: {result.get('more_info', '')}",
+                        "source": "bandit",
+                    })
+            elif scanner["parser"] == "semgrep":
+                for result in data.get("results", []):
+                    sev_map = {"ERROR": "HIGH", "WARNING": "MEDIUM", "INFO": "LOW"}
+                    sev = sev_map.get(result.get("extra", {}).get("severity", ""), "MEDIUM")
+                    findings.append({
+                        "id": result.get("check_id", "SEMGREP-?"),
+                        "file": os.path.relpath(result.get("path", "?"), PROJECT_ROOT),
+                        "line": result.get("start", {}).get("line", 0),
+                        "line_text": (result.get("extra", {}).get("lines", "").strip().splitlines() or [""])[0][:120],
+                        "severity": sev,
+                        "category": "security",
+                        "name": result.get("check_id", "").split(".")[-1],
+                        "description": result.get("extra", {}).get("message", ""),
+                        "fix": f"See: {result.get('extra', {}).get('metadata', {}).get('references', [''])[0]}",
+                        "source": "semgrep",
+                    })
+            elif scanner["parser"] == "eslint":
+                for file_result in (data if isinstance(data, list) else []):
+                    for msg in file_result.get("messages", []):
+                        sev = "HIGH" if msg.get("severity", 1) >= 2 else "MEDIUM"
+                        findings.append({
+                            "id": f"ESLINT-{msg.get('ruleId', '?')}",
+                            "file": os.path.relpath(file_result.get("filePath", "?"), PROJECT_ROOT),
+                            "line": msg.get("line", 0),
+                            "line_text": msg.get("source", "")[:120],
+                            "severity": sev,
+                            "category": "quality",
+                            "name": msg.get("ruleId", "?"),
+                            "description": msg.get("message", ""),
+                            "fix": f"ESLint rule: {msg.get('ruleId', '?')}",
+                            "source": "eslint",
+                        })
+            elif scanner["parser"] == "gosec":
+                for issue in data.get("Issues", []):
+                    sev = issue.get("severity", "MEDIUM").upper()
+                    findings.append({
+                        "id": f"GOSEC-{issue.get('rule_id', '?')}",
+                        "file": issue.get("file", "?"),
+                        "line": int(issue.get("line", 0)),
+                        "line_text": issue.get("code", "")[:120],
+                        "severity": sev if sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW") else "MEDIUM",
+                        "category": "security",
+                        "name": issue.get("details", "?")[:60],
+                        "description": issue.get("details", ""),
+                        "fix": f"See: {issue.get('cwe', {}).get('url', '')}",
+                        "source": "gosec",
+                    })
+
+    return findings
+
+
+def deduplicate_findings(findings):
+    """Remove duplicate findings (same file, line, and rule name)."""
+    seen = set()
+    unique = []
+    for f in findings:
+        key = (f["file"], f["line"], f["name"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(f)
+    return unique
+
+
+SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+
+
 # ── Fix History ────────────────────────────────────────────────────────────
 
 def load_history():
@@ -1295,10 +1650,152 @@ def cmd_history():
     print()
 
 
+def cmd_scan(severity_filter=None, category_filter=None, export_json=False):
+    """Scan the entire codebase for bugs, vulnerabilities, and code quality issues."""
+    header("Scanning Codebase", "\U0001f50e")
+
+    config = load_config()
+    patterns = config.get("watch_patterns", [])
+    files = collect_project_files(patterns)
+
+    if not files:
+        print(f"  {YELLOW}No files found matching watch_patterns.{RESET}")
+        print(f"  {DIM}Run --init --auto to configure.{RESET}")
+        print()
+        return
+
+    # detect languages present
+    languages = set()
+    file_langs = {}
+    for f in files:
+        lang = detect_language(f)
+        if lang:
+            languages.add(lang)
+            file_langs[f] = lang
+
+    print(f"  Scanning {BOLD}{len(files)}{RESET} files across {BOLD}{len(languages)}{RESET} language(s)...")
+    print(f"  Languages: {', '.join(sorted(languages))}")
+    print()
+
+    # built-in scan
+    all_findings = []
+    scanned = 0
+    for f, lang in file_langs.items():
+        findings = scan_file(f, lang)
+        all_findings.extend(findings)
+        scanned += 1
+
+    print(f"  {GREEN}✔{RESET} Built-in rules: scanned {scanned} files, found {BOLD}{len(all_findings)}{RESET} issues")
+
+    # external scanners
+    ext_findings = run_external_scanners(languages)
+    if ext_findings:
+        print(f"  {GREEN}✔{RESET} External tools: found {BOLD}{len(ext_findings)}{RESET} additional issues")
+        all_findings.extend(ext_findings)
+
+    # deduplicate
+    all_findings = deduplicate_findings(all_findings)
+
+    # filter
+    if severity_filter:
+        sev_set = {s.upper() for s in severity_filter.split(",")}
+        all_findings = [f for f in all_findings if f["severity"] in sev_set]
+    if category_filter:
+        cat_set = {c.lower() for c in category_filter.split(",")}
+        all_findings = [f for f in all_findings if f["category"] in cat_set]
+
+    # sort by severity
+    all_findings.sort(key=lambda f: (SEVERITY_ORDER.get(f["severity"], 99), f["file"], f["line"]))
+
+    if not all_findings:
+        box("Scan Results", [
+            f"  {GREEN}{BOLD}No issues found!{RESET}",
+            f"  {DIM}Your codebase looks clean.{RESET}",
+        ], GREEN)
+        print()
+        return
+
+    # count by severity and category
+    sev_counts = collections.Counter(f["severity"] for f in all_findings)
+    cat_counts = collections.Counter(f["category"] for f in all_findings)
+
+    summary_lines = [
+        f"  Total issues: {BOLD}{len(all_findings)}{RESET}",
+        "",
+        f"  {BOLD}By severity:{RESET}",
+    ]
+    for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]:
+        count = sev_counts.get(sev, 0)
+        if count == 0:
+            continue
+        color = RED if sev == "CRITICAL" else RED if sev == "HIGH" else YELLOW if sev == "MEDIUM" else DIM
+        bar = "█" * min(count, 30)
+        summary_lines.append(f"    {color}{bar}{RESET} {sev}: {BOLD}{count}{RESET}")
+
+    summary_lines.append("")
+    summary_lines.append(f"  {BOLD}By category:{RESET}")
+    for cat in ["security", "logic", "quality"]:
+        count = cat_counts.get(cat, 0)
+        if count > 0:
+            icon = "\U0001f6e1️" if cat == "security" else "\U0001f9e9" if cat == "logic" else "✨"
+            summary_lines.append(f"    {icon}  {cat}: {BOLD}{count}{RESET}")
+
+    box("Scan Summary", summary_lines, RED if sev_counts.get("CRITICAL", 0) > 0 else YELLOW)
+
+    # group findings by file
+    by_file = collections.defaultdict(list)
+    for f in all_findings:
+        by_file[f["file"]].append(f)
+
+    for filepath in sorted(by_file.keys()):
+        file_findings = by_file[filepath]
+        finding_lines = []
+        for f in file_findings:
+            sev = f["severity"]
+            color = RED if sev in ("CRITICAL", "HIGH") else YELLOW if sev == "MEDIUM" else DIM
+            icon = "\U0001f6a8" if sev == "CRITICAL" else "⚠️" if sev == "HIGH" else "○" if sev == "MEDIUM" else "·"
+            finding_lines.append(f"  {color}{icon} Line {f['line']}: {BOLD}{f['name']}{RESET} [{sev}]")
+            finding_lines.append(f"    {DIM}{f['description']}{RESET}")
+            if f["line_text"]:
+                text = f["line_text"][:100]
+                finding_lines.append(f"    {DIM}> {text}{RESET}")
+            finding_lines.append(f"    {CYAN}Fix: {f['fix']}{RESET}")
+            finding_lines.append("")
+
+        file_color = RED if any(f["severity"] in ("CRITICAL", "HIGH") for f in file_findings) else YELLOW
+        box(f"{filepath} ({len(file_findings)} issues)", finding_lines, file_color)
+
+    # save report
+    report_path = _resolve_scan_report_path()
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    report = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "files_scanned": scanned,
+        "total_issues": len(all_findings),
+        "by_severity": dict(sev_counts),
+        "by_category": dict(cat_counts),
+        "findings": all_findings,
+    }
+    with open(report_path, "w", encoding="utf-8") as fh:
+        json.dump(report, fh, indent=2)
+    print(f"\n  {GREEN}✔{RESET} Report saved to {os.path.relpath(report_path)}")
+
+    # final verdict
+    if sev_counts.get("CRITICAL", 0) > 0:
+        print(f"\n  {RED}{BOLD}\U0001f6a8 {sev_counts['CRITICAL']} CRITICAL issue(s) found — fix these first.{RESET}")
+    elif sev_counts.get("HIGH", 0) > 0:
+        print(f"\n  {YELLOW}{BOLD}⚠️  {sev_counts['HIGH']} HIGH severity issue(s) found.{RESET}")
+    else:
+        print(f"\n  {YELLOW}Only medium/low issues remain.{RESET}")
+
+    print()
+
+
 def cmd_reset():
     """Delete cached state files."""
     header("Resetting cache", "\U0001f9f9")
-    targets = [PRE_STATE, POST_STATE, ANALYSIS_MD, FIX_PLAN_MD, GRAPH_JSON, HISTORY_JSON]
+    scan_report = _resolve_scan_report_path()
+    targets = [PRE_STATE, POST_STATE, ANALYSIS_MD, FIX_PLAN_MD, GRAPH_JSON, HISTORY_JSON, scan_report]
     for path in targets:
         if os.path.exists(path):
             os.remove(path)
@@ -1323,11 +1820,14 @@ def main():
     group.add_argument("--graph", action="store_true", help="Build and display the dependency graph")
     group.add_argument("--impact", metavar="FILE", help="Show blast radius of changing a file")
     group.add_argument("--history", action="store_true", help="Show fix history and stats")
+    group.add_argument("--scan", action="store_true", help="Scan codebase for bugs, vulnerabilities, and code quality issues")
     group.add_argument("--reset", action="store_true", help="Delete cached state files")
 
     parser.add_argument("--auto", action="store_true", help="Auto-detect project stack (use with --init)")
     parser.add_argument("--json", action="store_true", help="Export graph data to JSON (use with --graph)")
     parser.add_argument("--project", metavar="DIR", help="Target project directory (default: parent of .safe-fix/)")
+    parser.add_argument("--severity", metavar="LEVELS", help="Filter scan by severity: CRITICAL,HIGH,MEDIUM,LOW")
+    parser.add_argument("--category", metavar="TYPES", help="Filter scan by category: security,logic,quality")
 
     args = parser.parse_args()
 
@@ -1352,6 +1852,8 @@ def main():
         cmd_impact(args.impact)
     elif args.history:
         cmd_history()
+    elif args.scan:
+        cmd_scan(severity_filter=args.severity, category_filter=args.category, export_json=args.json)
     elif args.reset:
         cmd_reset()
 

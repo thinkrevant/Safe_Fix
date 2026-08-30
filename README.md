@@ -39,21 +39,30 @@ Safe Fix makes that impossible. If a fix introduces a regression, the system cat
 
 ## Quick start
 
-### 1. Copy into your project
+### Option A: Install via pip (recommended)
 
 ```bash
-# Copy the core files into your project
-cp -r .safe-fix/ /path/to/your/project/.safe-fix/
+pip install safe-fix
 ```
 
-### 2. Auto-detect your stack (recommended)
+Then from any project directory:
 
 ```bash
+cd /path/to/your/project
+safe-fix --init --auto
+```
+
+### Option B: Copy into your project
+
+```bash
+cp -r .safe-fix/ /path/to/your/project/.safe-fix/
 cd /path/to/your/project
 python .safe-fix/verifier.py --init --auto
 ```
 
-This scans your project for `package.json`, `requirements.txt`, `go.mod`, `Cargo.toml`, `Gemfile`, etc. and generates the right `config.json` automatically. It also checks which tools (pytest, eslint, golangci-lint...) are actually installed and skips the ones that aren't.
+### What `--init --auto` does
+
+Scans your project for `package.json`, `requirements.txt`, `go.mod`, `Cargo.toml`, `Gemfile`, etc. and generates the right `config.json` automatically. It also checks which tools (pytest, eslint, golangci-lint...) are actually installed and skips the ones that aren't.
 
 **Or configure manually** — edit `.safe-fix/config.json` with your real commands:
 
@@ -68,21 +77,27 @@ This scans your project for `package.json`, `requirements.txt`, `go.mod`, `Cargo
 }
 ```
 
-### 3. Add to .gitignore
+### Add to .gitignore
 
 ```
 .safe-fix/cache/
 ```
 
-### 4. Use it
-
-Run manually:
+### Use it
 
 ```bash
-python .safe-fix/verifier.py --pre       # snapshot before
+safe-fix --pre       # snapshot before
 # ... make your changes ...
-python .safe-fix/verifier.py --post      # snapshot after
-python .safe-fix/verifier.py --compare   # detect regressions
+safe-fix --post      # snapshot after
+safe-fix --compare   # detect regressions
+```
+
+### Target a different project (no copying needed)
+
+```bash
+safe-fix --init --auto --project /path/to/any/project
+safe-fix --pre --project /path/to/any/project
+safe-fix --graph --project /path/to/any/project
 ```
 
 ## Config examples
@@ -179,6 +194,7 @@ python .safe-fix/verifier.py --compare   # detect regressions
 | `--impact FILE` | Shows the blast radius of changing a specific file — every file transitively affected |
 | `--history` | Shows fix history — pass/fail timeline, streaks, most-changed files, success rate |
 | `--reset` | Deletes cached state files |
+| `--project DIR` | Target a different project directory (default: current directory) |
 
 ## Dependency graph
 

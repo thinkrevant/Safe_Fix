@@ -11,10 +11,12 @@ import glob
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import subprocess
 import sys
+import webbrowser
 
 # Force UTF-8 output on Windows
 if sys.platform == "win32":
@@ -1339,7 +1341,297 @@ def cmd_compare():
     sys.exit(0)
 
 
-def cmd_graph(export_json=False):
+def generate_visual_graph(files, depends_on, depended_by):
+    """Generate an interactive HTML dependency graph and open in browser."""
+    nodes = []
+    edges = []
+    node_index = {f: i for i, f in enumerate(files)}
+
+    for idx, f in enumerate(files):
+        dep_count = len(depends_on.get(f, []))
+        dependent_count = len(depended_by.get(f, []))
+        total = dep_count + dependent_count
+        name = os.path.basename(f)
+        directory = os.path.dirname(f) or "."
+        nodes.append({
+            "id": idx, "file": f, "name": name, "dir": directory,
+            "imports": dep_count, "importedBy": dependent_count, "total": total,
+        })
+
+    for source, targets in depends_on.items():
+        for target in targets:
+            if source in node_index and target in node_index:
+                edges.append({"source": node_index[source], "target": node_index[target]})
+
+    graph_data = json.dumps({"nodes": nodes, "edges": edges})
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Safe Fix — Dependency Graph</title>
+<style>
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ background: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; overflow: hidden; }}
+canvas {{ display: block; cursor: grab; }}
+canvas:active {{ cursor: grabbing; }}
+#info {{ position: fixed; top: 16px; left: 16px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; max-width: 320px; font-size: 13px; z-index: 10; }}
+#info h2 {{ font-size: 15px; margin-bottom: 8px; color: #58a6ff; }}
+#info p {{ margin: 4px 0; color: #8b949e; }}
+#info .stat {{ color: #c9d1d9; }}
+#tooltip {{ position: fixed; background: #1c2128; border: 1px solid #30363d; border-radius: 6px; padding: 12px; font-size: 12px; pointer-events: none; display: none; z-index: 20; max-width: 350px; }}
+#tooltip .file {{ color: #58a6ff; font-weight: 600; font-size: 13px; }}
+#tooltip .dir {{ color: #8b949e; font-size: 11px; }}
+#tooltip .stats {{ margin-top: 6px; }}
+#tooltip .stats span {{ display: inline-block; margin-right: 12px; }}
+#tooltip .imp {{ color: #3fb950; }}
+#tooltip .dep {{ color: #f0883e; }}
+#legend {{ position: fixed; bottom: 16px; left: 16px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px 16px; font-size: 12px; z-index: 10; }}
+#legend span {{ margin-right: 16px; }}
+#legend .dot {{ display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }}
+#search {{ position: fixed; top: 16px; right: 16px; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 8px 12px; color: #c9d1d9; font-size: 13px; width: 220px; outline: none; z-index: 10; }}
+#search:focus {{ border-color: #58a6ff; }}
+#search::placeholder {{ color: #484f58; }}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="info">
+<h2>Dependency Graph</h2>
+<p><span class="stat">{len(files)}</span> files &middot; <span class="stat">{len(edges)}</span> connections</p>
+<p style="margin-top:8px;color:#8b949e;font-size:11px;">Drag to pan &middot; Scroll to zoom &middot; Hover for details</p>
+</div>
+<input id="search" type="text" placeholder="Search files...">
+<div id="tooltip"></div>
+<div id="legend">
+<span><span class="dot" style="background:#f0883e"></span> Hub (many dependents)</span>
+<span><span class="dot" style="background:#58a6ff"></span> Normal</span>
+<span><span class="dot" style="background:#30363d"></span> Isolated</span>
+</div>
+<script>
+const data = {graph_data};
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const tooltip = document.getElementById('tooltip');
+const searchInput = document.getElementById('search');
+
+let W, H;
+function resize() {{ W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }}
+resize();
+window.addEventListener('resize', () => {{ resize(); draw(); }});
+
+const nodes = data.nodes;
+const edges = data.edges;
+const N = nodes.length;
+
+// layout: force-directed simulation
+const rng = (s) => {{ s = Math.sin(s * 127.1) * 43758.5453; return s - Math.floor(s); }};
+nodes.forEach((n, i) => {{
+    n.x = W/2 + (rng(i*3+1) - 0.5) * Math.min(W, H) * 0.6;
+    n.y = H/2 + (rng(i*3+2) - 0.5) * Math.min(W, H) * 0.6;
+    n.vx = 0; n.vy = 0;
+    n.radius = Math.max(6, Math.min(20, 6 + n.total * 2));
+}});
+
+function simulate() {{
+    const alpha = 0.3;
+    // repulsion
+    for (let i = 0; i < N; i++) {{
+        for (let j = i + 1; j < N; j++) {{
+            let dx = nodes[j].x - nodes[i].x;
+            let dy = nodes[j].y - nodes[i].y;
+            let d = Math.sqrt(dx*dx + dy*dy) || 1;
+            let force = -800 / (d * d);
+            let fx = dx / d * force;
+            let fy = dy / d * force;
+            nodes[i].vx -= fx; nodes[i].vy -= fy;
+            nodes[j].vx += fx; nodes[j].vy += fy;
+        }}
+    }}
+    // attraction (edges)
+    edges.forEach(e => {{
+        let s = nodes[e.source], t = nodes[e.target];
+        let dx = t.x - s.x, dy = t.y - s.y;
+        let d = Math.sqrt(dx*dx + dy*dy) || 1;
+        let force = (d - 120) * 0.01;
+        let fx = dx / d * force, fy = dy / d * force;
+        s.vx += fx; s.vy += fy;
+        t.vx -= fx; t.vy -= fy;
+    }});
+    // center gravity
+    nodes.forEach(n => {{
+        n.vx += (W/2 - n.x) * 0.001;
+        n.vy += (H/2 - n.y) * 0.001;
+        n.vx *= 0.85; n.vy *= 0.85;
+        n.x += n.vx * alpha; n.y += n.vy * alpha;
+    }});
+}}
+
+// run initial simulation
+for (let i = 0; i < 200; i++) simulate();
+
+let panX = 0, panY = 0, scale = 1;
+let dragging = false, lastX, lastY;
+let hovered = null;
+let searchTerm = '';
+
+canvas.addEventListener('mousedown', e => {{ dragging = true; lastX = e.clientX; lastY = e.clientY; }});
+canvas.addEventListener('mousemove', e => {{
+    if (dragging) {{
+        panX += e.clientX - lastX; panY += e.clientY - lastY;
+        lastX = e.clientX; lastY = e.clientY;
+        draw();
+    }} else {{
+        const mx = (e.clientX - panX) / scale;
+        const my = (e.clientY - panY) / scale;
+        hovered = null;
+        for (let i = N - 1; i >= 0; i--) {{
+            const dx = nodes[i].x - mx, dy = nodes[i].y - my;
+            if (dx*dx + dy*dy < nodes[i].radius * nodes[i].radius * 1.5) {{
+                hovered = i; break;
+            }}
+        }}
+        if (hovered !== null) {{
+            const n = nodes[hovered];
+            tooltip.style.display = 'block';
+            tooltip.style.left = (e.clientX + 16) + 'px';
+            tooltip.style.top = (e.clientY + 16) + 'px';
+            tooltip.innerHTML = '<div class="file">' + n.name + '</div>'
+                + '<div class="dir">' + n.file + '</div>'
+                + '<div class="stats">'
+                + '<span class="imp">imports: ' + n.imports + '</span>'
+                + '<span class="dep">imported by: ' + n.importedBy + '</span>'
+                + '</div>';
+        }} else {{
+            tooltip.style.display = 'none';
+        }}
+        draw();
+    }}
+}});
+canvas.addEventListener('mouseup', () => {{ dragging = false; }});
+canvas.addEventListener('wheel', e => {{
+    e.preventDefault();
+    const zoom = e.deltaY > 0 ? 0.9 : 1.1;
+    const mx = e.clientX, my = e.clientY;
+    panX = mx - (mx - panX) * zoom;
+    panY = my - (my - panY) * zoom;
+    scale *= zoom;
+    draw();
+}}, {{ passive: false }});
+
+searchInput.addEventListener('input', e => {{
+    searchTerm = e.target.value.toLowerCase();
+    draw();
+}});
+
+function nodeColor(n, idx) {{
+    if (searchTerm && !n.file.toLowerCase().includes(searchTerm) && !n.name.toLowerCase().includes(searchTerm))
+        return 'rgba(48,54,61,0.4)';
+    if (hovered !== null) {{
+        if (idx === hovered) return '#f78166';
+        const isConn = edges.some(e =>
+            (e.source === hovered && e.target === idx) ||
+            (e.target === hovered && e.source === idx));
+        if (isConn) return '#3fb950';
+        return 'rgba(88,166,255,0.25)';
+    }}
+    if (n.total === 0) return '#30363d';
+    if (n.importedBy >= 3) return '#f0883e';
+    return '#58a6ff';
+}}
+
+function draw() {{
+    ctx.clearRect(0, 0, W, H);
+    ctx.save();
+    ctx.translate(panX, panY);
+    ctx.scale(scale, scale);
+
+    // edges
+    edges.forEach(e => {{
+        const s = nodes[e.source], t = nodes[e.target];
+        let alpha = 0.25;
+        let color = '88,166,255';
+        if (hovered !== null) {{
+            if (e.source === hovered || e.target === hovered) {{
+                alpha = 0.8; color = '63,185,80';
+            }} else {{
+                alpha = 0.06;
+            }}
+        }}
+        ctx.beginPath();
+        ctx.moveTo(s.x, s.y);
+        ctx.lineTo(t.x, t.y);
+        ctx.strokeStyle = 'rgba(' + color + ',' + alpha + ')';
+        ctx.lineWidth = hovered !== null && (e.source === hovered || e.target === hovered) ? 2 : 1;
+        ctx.stroke();
+
+        // arrowhead
+        if (alpha > 0.1) {{
+            const dx = t.x - s.x, dy = t.y - s.y;
+            const d = Math.sqrt(dx*dx + dy*dy) || 1;
+            const ux = dx/d, uy = dy/d;
+            const ax = t.x - ux * (t.radius + 4), ay = t.y - uy * (t.radius + 4);
+            const sz = 6;
+            ctx.beginPath();
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(ax - ux*sz - uy*sz*0.5, ay - uy*sz + ux*sz*0.5);
+            ctx.lineTo(ax - ux*sz + uy*sz*0.5, ay - uy*sz - ux*sz*0.5);
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(' + color + ',' + alpha + ')';
+            ctx.fill();
+        }}
+    }});
+
+    // nodes
+    nodes.forEach((n, i) => {{
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, n.radius, 0, Math.PI * 2);
+        ctx.fillStyle = nodeColor(n, i);
+        ctx.fill();
+        if (i === hovered) {{
+            ctx.strokeStyle = '#f78166';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }}
+    }});
+
+    // labels
+    const showLabels = scale > 0.5;
+    if (showLabels) {{
+        ctx.font = (11 / Math.max(scale, 0.5)) + 'px -apple-system, sans-serif';
+        ctx.textAlign = 'center';
+        nodes.forEach((n, i) => {{
+            if (searchTerm && !n.file.toLowerCase().includes(searchTerm) && !n.name.toLowerCase().includes(searchTerm))
+                return;
+            let show = hovered === null || i === hovered ||
+                edges.some(e => (e.source === hovered && e.target === i) || (e.target === hovered && e.source === i));
+            if (!show && scale < 1.2 && N > 20) return;
+            ctx.fillStyle = i === hovered ? '#f78166' : 'rgba(201,209,217,0.8)';
+            ctx.fillText(n.name, n.x, n.y + n.radius + 14);
+        }});
+    }}
+
+    ctx.restore();
+}}
+
+draw();
+</script>
+</body>
+</html>"""
+
+    graph_html_path = os.path.join(CACHE_DIR, "dependency-graph.html")
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    with open(graph_html_path, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    print(f"\n  {GREEN}✔{RESET} Visual graph saved to {os.path.relpath(graph_html_path)}")
+    print(f"  {CYAN}Opening in browser...{RESET}")
+    webbrowser.open("file://" + os.path.abspath(graph_html_path).replace("\\", "/"))
+    return graph_html_path
+
+
+def cmd_graph(export_json=False, visual=False):
     """Build and display the full dependency graph."""
     header("Dependency Graph", "\U0001f578️")
 
@@ -1427,6 +1719,10 @@ def cmd_graph(export_json=False):
         with open(GRAPH_JSON, "w", encoding="utf-8") as fh:
             json.dump(graph_data, fh, indent=2)
         print(f"\n  {GREEN}✔{RESET} Exported to {os.path.relpath(GRAPH_JSON)}")
+
+    # ── Visual graph ───────────────────────────────────────────────────
+    if visual:
+        generate_visual_graph(files, depends_on, depended_by)
 
     print()
 
@@ -1825,6 +2121,7 @@ def main():
 
     parser.add_argument("--auto", action="store_true", help="Auto-detect project stack (use with --init)")
     parser.add_argument("--json", action="store_true", help="Export graph data to JSON (use with --graph)")
+    parser.add_argument("--visual", action="store_true", help="Generate interactive HTML graph and open in browser (use with --graph)")
     parser.add_argument("--project", metavar="DIR", help="Target project directory (default: parent of .safe-fix/)")
     parser.add_argument("--severity", metavar="LEVELS", help="Filter scan by severity: CRITICAL,HIGH,MEDIUM,LOW")
     parser.add_argument("--category", metavar="TYPES", help="Filter scan by category: security,logic,quality")
@@ -1847,7 +2144,7 @@ def main():
     elif args.compare:
         cmd_compare()
     elif args.graph:
-        cmd_graph(export_json=args.json)
+        cmd_graph(export_json=args.json, visual=args.visual)
     elif args.impact:
         cmd_impact(args.impact)
     elif args.history:

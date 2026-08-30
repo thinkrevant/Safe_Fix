@@ -191,6 +191,7 @@ safe-fix --graph --project /path/to/any/project
 | `--compare` | Compares snapshots. Exit 0 = safe. Exit 1 = regression or no improvement. |
 | `--graph` | Scans imports across all watched files and displays the dependency map |
 | `--graph --json` | Same as `--graph` but also exports to `.safe-fix/cache/dependency-graph.json` |
+| `--graph --visual` | Generate interactive HTML dependency graph and open in browser |
 | `--impact FILE` | Shows the blast radius of changing a specific file — every file transitively affected |
 | `--history` | Shows fix history — pass/fail timeline, streaks, most-changed files, success rate |
 | `--scan` | Scan entire codebase for bugs, vulnerabilities, and code quality issues |
@@ -240,11 +241,21 @@ The verifier can scan your codebase and map which files import which. This tells
 
 ```bash
 # See the full dependency map
-python .safe-fix/verifier.py --graph
+safe-fix --graph
 
 # Check what breaks if you change a specific file
-python .safe-fix/verifier.py --impact src/auth.py
+safe-fix --impact src/auth.py
+
+# Generate an interactive visual graph (opens in browser)
+safe-fix --graph --visual
 ```
+
+The `--visual` flag generates an interactive HTML graph with:
+- Drag to pan, scroll to zoom
+- Hover over any node to see its imports and dependents
+- Connected files highlight on hover
+- Search bar to find files
+- Color coding: orange = hub files, blue = normal, gray = isolated
 
 **Supported languages:** Python, JavaScript, TypeScript, Go, Java, Ruby, Rust, C, C++
 

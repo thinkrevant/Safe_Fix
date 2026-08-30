@@ -1,0 +1,9 @@
+{
+  "checks": {
+    "tests": "python -m pytest tests/ -q",
+    "syntax": "python -m py_compile app/calculator.py && python -m py_compile app/user_manager.py && python -m py_compile app/file_handler.py && python -m py_compile app/sanitizer.py"
+  },
+  "watch_patterns": [
+    "**/*.py"
+  ]
+}
